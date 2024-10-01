@@ -2,8 +2,10 @@ import math
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
-
 from dataclasses import dataclass
+
+import tiktoken
+
 
 
 class MHA(nn.Module):
@@ -197,7 +199,32 @@ class GPT(nn.Module):
 
         return idx
 
+class DataLoaderLite:
+    def __init__(self, B, T):
+        self.B, self.T = B, T
+        # at init load tokens from disk and store them in memory
+        with open('input.txt', 'r') as f:
+            text = f.read()
+        # Use tiktoken to encode the prompt into token IDs
+        enc = tiktoken.get_encoding('gpt2')
+        tokens = enc.encode(text)
+        self.tokens = torch.tensor(tokens)
+        print(f"loaded {len(self.tokens)} tokens")
+        print(f"1 epoch = {len(self.tokens) // (B*T)} batches")
+        # state
+        self.current_position = 0
 
+    def next_batch(self):
+        B, T = self.B, self.T
+        buf = self.tokens[self.current_position : self.current_position + B*T+1]
+        x = buf[:-1].view(B, T) # inputs
+        y = buf[1:].view(B, T) # targets
+        # advance the position in the tensor
+        self.current_position += B * T
+        # rest if the next batch is out of bounds
+        if self.current_position + (B * T + 1) > len(self.tokens):
+            self.current_position = 0
+        return x, y
 
 # ----------------------------------------------------------------------------------------
 device = "cpu"
@@ -207,34 +234,18 @@ elif hasattr(torch.backends, "mps") and torch.backends.mps.is_available():
     device = "mps"
 print(f"Using device: {device}")
 
-# Use tiktoken to encode the prompt into token IDs
-import tiktoken
-enc = tiktoken.get_encoding('gpt2')
-
-with open('input.txt', 'r') as f:
-    text = f.read()
-text = text[:1000]
-tokens = enc.encode(text)
-B, T = 4, 32
-buf = torch.tensor(tokens[:B*T + 1])
-x = buf[:-1].view(B, T)
-y = buf[1:].view(B, T)
-
-x = x.to(device)
-y = y.to(device)
+train_loader = DataLoaderLite(B=4, T=32)
 
 # model = GPT.from_pretrained('gpt2')
 model = GPT(GPTConfig())
-model.eval()
 model.to(device)
-torch.manual_seed(42)
-
-logits, loss = model(x, y)
 
 optimizer = torch.optim.AdamW(model.parameters(), lr=3e-4)
 for i in range(50):
-    optimizer.zero_grad()
+    x, y = train_loader.next_batch()
+    x, y = x.to(device), y.to(device)
     logits, loss = model(x, y)
+    optimizer.zero_grad()
     loss.backward()
     optimizer.step()
     print(f"step {i}, loss: {loss.item()}")
