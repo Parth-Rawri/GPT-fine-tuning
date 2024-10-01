@@ -69,7 +69,7 @@ class Block(nn.Module):
 @dataclass
 class GPTConfig:
     block_size: int = 1024
-    vocab_size: int = 50304 # GPT-2 vocab_size = 50257, padded to nearest multiple of 64 for efficiency!
+    vocab_size: int = 50257 #50304 # GPT-2 vocab_size = 50257, padded to nearest multiple of 64 for efficiency!
     n_layer: int = 12
     n_head: int = 12
     n_embd: int = 768
@@ -200,29 +200,65 @@ class GPT(nn.Module):
 
 
 # ----------------------------------------------------------------------------------------
-num_return_sequences = 5
-
-model = GPT.from_pretrained('gpt2')
-model.eval()
-model.to('cpu')
-torch.manual_seed(42)
-
+device = "cpu"
+if torch.cuda.is_available():
+    device = "cuda"
+elif hasattr(torch.backends, "mps") and torch.backends.mps.is_available():
+    device = "mps"
+print(f"Using device: {device}")
 
 # Use tiktoken to encode the prompt into token IDs
 import tiktoken
 enc = tiktoken.get_encoding('gpt2')
-prompt = "Hello, I'm a language model,"
-tokens = enc.encode(prompt)
-tokens = torch.tensor(tokens, dtype=torch.long)  # Convert tokens to a tensor
-tokens = tokens.unsqueeze(0).repeat(num_return_sequences, 1)  # Repeat for batch size
-x = tokens.to('cpu')
 
-# Generate sequences from the model
-with torch.no_grad():
-    generated_tokens = model.generate(x, max_new_tokens=20, top_k=50)
+with open('input.txt', 'r') as f:
+    text = f.read()
+text = text[:1000]
+tokens = enc.encode(text)
+B, T = 4, 32
+buf = torch.tensor(tokens[:B*T + 1])
+x = buf[:-1].view(B, T)
+y = buf[1:].view(B, T)
 
-# Decode the generated tokens back to text
-for i, seq in enumerate(generated_tokens):
-    decoded_text = enc.decode(seq.tolist())
-    print(f"Generated Sequence {i + 1}:\n{decoded_text}\n")
+x = x.to(device)
+y = y.to(device)
 
+# model = GPT.from_pretrained('gpt2')
+model = GPT(GPTConfig())
+model.eval()
+model.to(device)
+torch.manual_seed(42)
+
+logits, loss = model(x, y)
+
+optimizer = torch.optim.AdamW(model.parameters(), lr=3e-4)
+for i in range(50):
+    optimizer.zero_grad()
+    logits, loss = model(x, y)
+    loss.backward()
+    optimizer.step()
+    print(f"step {i}, loss: {loss.item()}")
+
+# prompt = "Hello, I'm a language model,"
+# tokens = enc.encode(prompt)
+
+# tokens = torch.tensor(tokens, dtype=torch.long)  # Convert tokens to a tensor
+# num_return_sequences = 5
+# tokens = tokens.unsqueeze(0).repeat(num_return_sequences, 1)  # Repeat for batch size
+# x = tokens.to(device)
+
+# # Generate sequences from the model
+# with torch.no_grad():
+#     generated_tokens = model.generate(x, max_new_tokens=20, top_k=50)
+
+# # Decode the generated tokens back to text
+# for i, seq in enumerate(generated_tokens):
+#     decoded_text = enc.decode(seq.tolist())
+#     print(f"Generated Sequence {i + 1}:\n{decoded_text}")
+
+
+
+
+
+
+ 
